@@ -1,0 +1,335 @@
+#include "r_cg_macrodriver.h"
+#include "r_cg_wdt.h"
+#include "r_cg_adc.h"
+#include "get_adc.h"
+#include "set_other.h"
+#include "var_define.h"
+#include "r_cg_userdefine.h"
+
+
+unsigned char adv36_success_flag=0;
+unsigned char adc_index=0;
+unsigned char adc_success_flag=0;
+unsigned char getadv_flag=0;
+unsigned char t_adv_count=1;
+unsigned int t_adv;
+unsigned int t_adv1;
+unsigned int t_adv2;
+unsigned int t_adv3;
+unsigned int t_sum;
+unsigned int t_Zerocounter;
+uint16_t t_ad[10];
+uint16_t t_minad;
+uint16_t t_maxad;
+uint16_t adv;
+
+unsigned int UC_D_Percent4_20MA_D;
+unsigned int UC_D_Percent4_20MA_Panle_D;
+unsigned int UC_D_Percent0_5V_D;
+unsigned long int ULI_AD_Adv_D=0;
+unsigned long int ULI_AD_AdvTemp_D=0;
+unsigned int ULI_AD_AdvDiff_D=0;
+unsigned long int ULI_PercentView_D;
+unsigned long int ULI_Percent_Xianxing;
+unsigned int UI_4_20MA_AD_D;
+unsigned int UI_AD_PressureAdv_D=0;
+unsigned int UI_AD_DiaphragmAdv_D=0;
+unsigned int UC_D_NormalADC_D;
+unsigned int UI_CallBackADC_D=0;
+
+
+unsigned int UC_D_NormalADC_D;
+unsigned char UI_C_MC_PWM_OUT_ERR_COUNT_D;  
+unsigned int UC_D_Diff_ADC_Value_D=0;
+unsigned char UC_D_CallBackValueAbove_S=0;  
+unsigned char UC_D_IsResize_D=0; 
+unsigned int UI_C_MC_Value_D;
+
+unsigned long int CurPressure_Level_Temp;
+extern unsigned long int ULI_C_PulseCallBack_C;
+extern unsigned int Pressure_Range;
+extern unsigned int CurPressure_Level;																					
+unsigned int UC_D_Get4_20mA_Value_D;
+unsigned long int UC_D_ADCVALUE_D;
+extern unsigned int UI_CalibParam_MA_DF;
+unsigned long int OutPut_B_Value;
+unsigned long int OutPut_Value;
+extern unsigned int UI_Percent_H2_DF;
+extern unsigned char UC_C_OnOffStatus_S;
+extern unsigned char UC_C_OnOff_S;
+
+
+
+struct _pid {
+	double SetSpeed;
+	double ActualSpeed;
+	double Err;
+	double Err_last;
+	double Err_Next;
+	double Kp, Ki, Kd;
+} pid;
+unsigned int tempff;
+
+/*-------------------------------------------------*/
+unsigned int UI_4_20MA_AD_K_DF;  //4-20ma 模式默认斜率K
+unsigned int UI_4_20MA_AD_B_DF;  //4-20ma 模式默认斜率B
+unsigned int UI_C_MA_H1_D; //当前MA 电流小数点后1
+extern unsigned char UI_AddSub_B_DF;
+extern unsigned char UI_Suc_Vel_Percent;
+
+
+/************************************************
+* Function Name: ADGetPressure  
+* Description  : Get electric current  判断压力 AD采样
+* Arguments    : None
+* Return Value : None
+*************************************************/
+void ADGet_Pressure(void)
+{
+	UI_AD_PressureAdv_D=get_adv_36(6);
+	
+	//检测压力液位的方法********bug**********
+	CheckPressureLevelAlarm();
+}
+
+/************************************************
+* Function Name: CheckDiaphragmAlarm  
+* Description  : Check Diaphragm Alarm  通过AD 检测隔膜报警
+* Arguments    : None
+* Return Value : None
+*************************************************/
+void CheckDiaphragmAlarm(void)
+{
+	UI_AD_DiaphragmAdv_D=get_adv_36(18);
+	
+	//检测隔膜破裂报警
+	CheckDiaphragmAlarmProgram();
+}
+
+
+/************************************************
+* Function Name: ADGet4_20MA  
+* Description  : ADGet4_20MA  获取mA 的小数点后1位
+* Arguments    : None
+* Return Value : None
+*************************************************/
+void ADGet4_20MA(void)
+{
+	static unsigned long filter_buf[8] = {0}; // 静态数组实现移动平均
+	static uint8_t index = 0;
+	static unsigned long sum = 0;
+
+	// 原始采样
+	ULI_AD_Adv_D = get_adv_36(4);
+
+	// 新增：移动平均滤波（仅3行代码）
+	sum = sum - filter_buf[index] + ULI_AD_Adv_D; // 移除旧值，添加新值
+	filter_buf[index] = ULI_AD_Adv_D;            // 更新缓冲区
+	index = (index + 1) % 8;                     // 滚动索引
+	ULI_AD_Adv_D = sum / 8;                      // 计算平均值
+
+	UI_4_20MA_AD_D = ULI_AD_Adv_D;
+	
+	if(ULI_AD_Adv_D>0)
+	{
+		unsigned long int ULI_4_20MAAD_Temp_D=0;
+		ULI_4_20MAAD_Temp_D=ULI_AD_Adv_D;
+		
+		//y = 0.2194x + 0.2628  = 0.2194(x+1.1978)
+		if(UI_AddSub_B_DF==0)
+		{
+			ULI_4_20MAAD_Temp_D=UI_4_20MA_AD_K_DF*ULI_4_20MAAD_Temp_D+UI_4_20MA_AD_B_DF;
+		}
+		else 
+		{
+			ULI_4_20MAAD_Temp_D=UI_4_20MA_AD_K_DF*ULI_4_20MAAD_Temp_D-UI_4_20MA_AD_B_DF;
+		}
+		ULI_4_20MAAD_Temp_D=ULI_4_20MAAD_Temp_D/1000;
+		if((ULI_4_20MAAD_Temp_D%10)>=7)
+		{
+			UI_C_MA_H1_D=ULI_4_20MAAD_Temp_D/10+1;
+		}
+		else
+		{
+			UI_C_MA_H1_D=ULI_4_20MAAD_Temp_D/10;
+		}
+	}
+	else
+	{
+		UI_C_MA_H1_D=0;
+	}
+	
+	//判断4-20ma 无输入或输出过高 开机校验
+	if(UC_C_OnOff_S==TRUE)
+	{
+		Check4_20MASensorFault();
+	}
+}
+
+/************************************************
+* Function Name: Get_OutPut
+* Description  : OUTPUT_CALLBACK
+* Arguments    : None
+* Return Value : None
+*************************************************/
+//20ma对应64150
+//4ma对应12799
+//b=65535-12799=51200
+void Get_OutPut(void)
+{	
+	OutPut_B_Value=UI_CalibParam_MA_DF;
+	OutPut_B_Value=OutPut_B_Value*12799;
+	OutPut_B_Value=OutPut_B_Value/1000;
+	if(UC_C_OnOffStatus_S==TRUE)
+	{
+		OutPut_Value=OutPut_B_Value+51.351*UI_Percent_H2_DF/10;
+	}
+	else
+	{
+		OutPut_Value=OutPut_B_Value;
+	}
+	//OutPut_Value=64150;
+	Write_Date(OutPut_Value);
+}
+
+
+void get_adv_1(char index)
+{
+    adc_success_flag = 0;
+    ADS = index;
+    R_ADC_Start();
+    while(adc_success_flag != 1){R_WDT_Restart();}
+    R_ADC_Stop();
+}
+
+unsigned int get_adv_36(char index)
+{
+	unsigned int i_sum;
+	t_Zerocounter = 1;
+	t_adv_count = 1;
+	adv36_success_flag = 0;
+	while(adv36_success_flag == 0)
+	{
+		while(getadv_flag == 0);
+		R_WDT_Restart();
+		getadv_flag = 0;
+		
+		switch (t_Zerocounter)
+		{	
+			case 1:case 2:case 3:case 4:case 5:case 6:case 7:case 8:case 9:case 10:
+				get_adv_1(index);t_ad[t_Zerocounter-1]= adv;break;
+			case 11:
+				t_max();
+				t_min();
+				
+				t_sum = 0;
+				for(i_sum=0;i_sum<10;i_sum++)
+				{
+					t_sum += t_ad[i_sum];
+				}
+				t_sum = t_sum-t_minad;
+				t_sum = t_sum-t_maxad;	
+				t_adv = t_sum/8;
+				break;
+
+			case 12:
+				if(t_adv_count == 1)
+				{
+					t_adv_count = 2;
+					t_adv1 = t_adv;
+				}
+				else if(t_adv_count == 2)
+				{
+					t_adv_count = 3;
+					t_adv2 = t_adv;
+				}
+				else if(t_adv_count == 3)
+				{
+					t_adv_count = 1;
+					t_adv3 = t_adv;
+					
+					t_adv = (t_adv1+t_adv2+t_adv3)/3;
+					adv36_success_flag = 1;
+				}
+				else{}
+				
+				t_Zerocounter = 0;
+				break;
+		}
+		t_Zerocounter++;
+	}
+	
+	adv36_success_flag = 0;
+	t_adv_count = 1;
+	t_Zerocounter = 0;
+	return t_adv;
+}
+
+void t_max(void)
+{
+	unsigned int i;
+	t_maxad = t_ad[0];
+	for(i=1;i<10;i++)
+	{
+		if(t_ad[i]>t_maxad)
+		{
+			t_maxad = t_ad[i];
+		}
+	}
+}
+
+void t_min(void)
+{
+	unsigned int i;
+	t_minad = t_ad[0];
+	for(i=1;i<10;i++)
+	{
+		if(t_ad[i]<t_minad)
+		{
+			t_minad = t_ad[i];
+		}
+	}
+}
+
+
+/************************************************
+* Function Name: PID_Init  
+* Description  : PID_Init
+* Arguments    : None
+* Return Value : None
+*************************************************/
+void PID_Init(void)
+{
+	pid.SetSpeed = 0;
+	pid.ActualSpeed = 0;
+	pid.Err = 0;
+	pid.Err_last = 0;
+	pid.Err_Next = 0;
+	pid.Kp = 0.02;
+	pid.Ki = 1.07;
+	pid.Kd = 0.00;
+}
+
+/************************************************
+* Function Name: PID_Calc  
+* Description  : PID_Calc
+* Arguments    : None
+* Return Value : None
+*************************************************/
+void PID_Calc(float speed) 
+{
+	float incrementSpeed;
+	
+	pid.SetSpeed = speed;
+	
+	pid.Err = pid.SetSpeed - pid.ActualSpeed;
+	
+	incrementSpeed = pid.Kp*(pid.Err - pid.Err_Next)+ pid.Ki*pid.Err
+		+pid.Kd * (pid.Err - 2 * pid.Err_Next + pid.Err_last);
+		
+	pid.ActualSpeed += incrementSpeed;
+	
+	pid.Err_last = pid.Err_Next;
+	
+	pid.Err_Next = pid.Err;
+}

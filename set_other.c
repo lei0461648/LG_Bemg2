@@ -1,0 +1,711 @@
+#include "r_cg_macrodriver.h"
+#include "var_define.h"
+#include "set_other.h"
+#include "b_basic.h"
+#include "r_cg_userdefine.h"
+#include "m_manual_1.h"
+#include "m_lot_4.h"
+#include "UART_SET.h"
+#include "string.h"
+#include "m_04_20ma_3.h"
+
+/************PARAM*************/
+unsigned int UI_Suc_Vel_Percent; //60%
+
+
+/************extern PARAM*************/
+extern unsigned int UI_Percent_H2_DF;
+extern unsigned char UC_C_WriteFlash_S;
+
+extern unsigned char UI_BaudRateStatusTemp_S;
+extern unsigned char UI_BaudRateStatus_SF;
+unsigned char UI_BaudRateStatusIN_S=0;//进行485读写
+extern unsigned char UI_RemoteControl_SF;
+extern unsigned char UI_SlowModeStatus_SF;
+
+extern unsigned char UC_C_OnOff_S;
+
+/************Calibration  4-20MA*************/ 
+unsigned long int deltaY_MA, deltaX_AD;
+unsigned long int LI_Y1_Tmp;
+unsigned long int LI_XB_Tmp;
+extern unsigned int UI_C_SetMinAdValue4_DF;
+extern unsigned int UI_C_SetMaxAdValue20_DF;
+extern unsigned int UI_4_20MA_AD_K_DF;
+extern unsigned int UI_4_20MA_AD_B_DF;
+unsigned char UI_AddSub_B_DF;
+
+extern unsigned char UC_D_SAVE_S;//掉电保存状态
+//Time
+unsigned char Time_Second;
+unsigned char Time_Minute;
+unsigned char Time_Hour;
+unsigned char Time_Day;
+unsigned char Time_Month;
+unsigned char Time_Year;
+
+extern unsigned char DELAY_COUNT_M; //更新延时时间
+
+
+//********压力液位********
+extern unsigned int UI_AD_PressureAdv_D; //4-20MA AD值
+unsigned char UC_PressureLevelAlarm_S=ALARM_Normal; //压力液位报警状态 模式0x55 正常抓状态
+unsigned long int UC_D_Percent_Pressure_level; //压力液位当前百分比
+extern unsigned int UI_IsPessureSwitch_SF; //压力 开关0x55 0xAA 
+extern unsigned int UI_IsLevelSwitch_SF; //液位 0x55 0xAA 
+unsigned int  UI_CurPressure_Level;//当前压力液位
+extern unsigned int UI_PessureRange_DF;//压力量程
+extern unsigned int UI_PessureHigh_DF;//高压力报警值
+extern unsigned int UI_PessureLow_DF;//底压力报警值
+extern unsigned int UI_LevelRange_DF; //液位量程
+extern unsigned int UI_LevelHigh_DF; //高液位报警值
+extern unsigned int UI_LevelLow_DF;//低液位报警值
+extern unsigned char  UC_04_20MAType_SF;
+
+//*******泵没有返回霍尔脉冲报警********
+extern unsigned long int ULI_C_PulseCallBack_C;//返回霍尔脉冲
+unsigned char UC_C_Gaosu_Count=0; //计数变量
+unsigned char UC_C_PumpAlarm_S;//泵的反馈异常报警
+extern unsigned int UI_C_MA_H1_D; //4-20MA 
+unsigned char UC_D_SensorERR_S=0; //4-20ma 输入状态值 1为无输入
+
+//*******4-20ma ********
+extern unsigned int UI_4_20MA_AD_D;
+// 继电器输出
+extern unsigned char UI_RunRelayOutput_SF;
+extern unsigned char UI_FaultyRelayOutput_SF; //故障继电器开关
+
+//循环投加计时模式
+extern unsigned char UC_LoopLotVolumeUnit_SF;
+extern unsigned long int LI_LoopLotVolume_DF;
+extern unsigned long int LI_LoopResidualFlow_D;
+
+//批次模式
+extern unsigned char UC_LotVolumeUnit_SF;
+extern unsigned long int LI_ResidualFlow_D; //剩余批量容积
+extern unsigned long int LI_LotVolume_DF; //批次容积
+
+//掉电记忆
+unsigned char UC_D_POWER_SAVE_C=0;
+unsigned char UC_D_POWER_SAVE_ZERO_C=0;
+//报警状态
+extern unsigned char UC_LevelKTStatusHL_S;
+unsigned char UC_4_20MAAlarmS_S;
+unsigned char UC_4_20MAAlarmS_C;
+extern unsigned char UC_SignalFault_D; //界面返回的报价参数
+unsigned char UC_ClearHRPulse_C;  //清楚霍尔反馈脉冲的计数
+
+//光电报警状态
+extern unsigned int UI_GDError_D;//光电报警计数
+extern unsigned int UI_GDError_C;//光电报警计数
+unsigned char UI_C_GDAlarm_S;//光电报警状态
+
+//激活模式
+extern unsigned char UC_ActiveMode_S;//激活状态
+extern unsigned char UC_ChangKSModel_S;//改变快吸慢推模式
+
+//隔膜报警
+extern unsigned int UI_AD_DiaphragmAdv_D;
+unsigned int UC_DiaphragmAlarm_S;//隔壁报警状态
+unsigned char UC_DiaphragmDelay_S;//隔膜报警运行
+unsigned char UC_DiaphragmDelay_C;//隔膜报警计数
+
+
+//计算累计流量
+extern unsigned int UI_SecondlyFlowML_H1_D;//每秒多少流量
+unsigned int UI_TotalFlowL_H1_DF;//累计流量L小数点后一位
+unsigned int UI_FlowInM3_DF;//累计M3
+extern unsigned char UI_TotalFlowAdd_S; //累计流量开始添加状态
+// 全局或静态变量用于累计中间值
+unsigned long int sum_mlx10 = 0; // 用于累计每30秒内的0.1毫升流量总和（包括余数）
+
+
+/**********************报警消息处理******************************/
+extern unsigned char UC_F_FlashData_A[158];
+
+/* 报警类型定义 */
+typedef enum {
+    ALARM_NONE = 0,
+    ALARM_EMPTY_BUCKET,    // 空桶报警
+    ALARM_HIGH_PRESSURE,   // 高压力
+    ALARM_LOW_PRESSURE,    // 低压力
+    ALARM_4_20MA_LOSS,     // 4-20mA丢失
+    ALARM_PUMP_FAILURE,    // 泵故障
+    ALARM_HEAD_PRESSURE,    // 机头压力
+    ALARM_GD_FAILURE,        // 光电异常
+    ALARM_DIA_FAILURE        // 隔膜报警
+} AlarmType;
+/* 全局报警状态 */
+static AlarmType active_alarm = ALARM_NONE; // 当前激活的报警
+static AlarmType last_alarm = ALARM_NONE;    // 上次检测到的报警
+
+
+/* 全局报警缓冲区 */
+AlarmMsg alarm_buffer[MAX_ALARMS];
+AlarmMsg new_alarm;
+unsigned char alarm_count;
+unsigned char move_count;
+/***********************************SET Suck fast and push slow BEGIN**************************************/
+
+/************************************************
+* Function Name: SuckFast  
+* Description  : Suck fast
+                 
+* Arguments    : None
+* Return Value : None
+*************************************************/
+void SuckFast(void)
+{
+	setSuckFastAndPushSlow();//设置快吸的速度
+}
+
+/************************************************
+* Function Name: SuckFast  
+* Description  : Suck fast
+                 
+* Arguments    : None
+* Return Value : None
+*************************************************/
+void PushSlow(void)
+{
+	RunCal();// 慢推就是当前模式下的当前速度
+}
+
+
+
+/***********************************标定  4-20MA BEGIN**************************************/
+/************************************************
+* Function Name: GetSlopeIntercept_KB  
+* Description  : 
+* Arguments    : None
+* Return Value : None
+*************************************************/
+void GetSlopeIntercept_KB (void)
+{
+	unsigned long int LI_K_Tmp;
+	
+	deltaY_MA=160;// 200.0MA-4.0MA
+	deltaX_AD=UI_C_SetMaxAdValue20_DF-UI_C_SetMinAdValue4_DF;
+	UI_4_20MA_AD_K_DF = (deltaY_MA*10000/deltaX_AD);
+	
+	LI_Y1_Tmp=400000;   //Y1=4.0MA  
+	LI_K_Tmp=UI_4_20MA_AD_K_DF;
+	LI_XB_Tmp=LI_K_Tmp*UI_C_SetMinAdValue4_DF;   //kx X1=MinAD 
+	
+	if(LI_Y1_Tmp>=LI_XB_Tmp) //b=y-kx   y>=kx
+	{
+		UI_AddSub_B_DF=0;
+		UI_4_20MA_AD_B_DF = LI_Y1_Tmp-LI_XB_Tmp;//y-kx
+	}
+	else // y<kx
+	{
+		UI_AddSub_B_DF=1;
+		UI_4_20MA_AD_B_DF =LI_XB_Tmp-LI_Y1_Tmp;//kx-y
+	}
+	UC_C_WriteFlash_S=TRUE;
+}
+
+/***********************************SET Change Time 设置时间**************************************/
+void Change_SystemTime(unsigned char Time_Minute,unsigned char Time_Hour,unsigned char Time_Day,unsigned char Time_Month,unsigned char Time_Year)
+{
+	Write1302(WRITE_PROTECT,0x00); 
+	Write1302(WRITE_YEAR,Time_Year);
+	Write1302(WRITE_MONTH,Time_Month);
+	Write1302(WRITE_DAY,Time_Day);
+	Write1302(WRITE_HOUR,Time_Hour);
+	Write1302(WRITE_MINUTE,Time_Minute);
+	Write1302(WRITE_PROTECT,0x80); 
+}
+
+/*****************************************
+* Function Name: UpdateTime  
+* Description  : update time to MCU
+* Arguments    : None
+* Return Value : None
+******************************************/
+void UpdateTime(void)
+{
+	//非断电情况
+	if(UC_D_SAVE_S==0)
+	{
+		//延时读取
+		if(DELAY_COUNT_M>=25)
+		{		
+			Time_Second=Read1302(READ_SECOND);
+			Time_Year=Read1302(READ_YEAR);
+			Time_Month=Read1302(READ_MONTH);
+			Time_Day=Read1302(READ_DAY);
+			Time_Hour=Read1302(READ_HOUR);
+			Time_Minute=Read1302(READ_MINUTE);
+			DELAY_COUNT_M=0;
+		}
+	}
+}
+
+
+/***********************************检测压力液警值**********************************************************************/
+void CheckPressureLevelAlarm(void)
+{
+	if(UI_AD_PressureAdv_D<=100)
+	{
+		UC_PressureLevelAlarm_S=ALARM_Normal;//压力液位没接正常
+		return;
+	}
+	else if(UI_AD_PressureAdv_D>100&&UI_AD_PressureAdv_D<=171)
+	{
+		UC_D_Percent_Pressure_level=0;//4-20MA 百分比0 
+	}	
+	else if(UI_AD_PressureAdv_D>=862)
+	{
+		UC_D_Percent_Pressure_level=100;//4-20MA 百分比0 
+	}
+	else
+	{
+		UC_D_Percent_Pressure_level=(unsigned int)(UI_AD_PressureAdv_D*1.516-248); //计算4-20Ma 百分比
+		
+		if((UC_D_Percent_Pressure_level%10)>=5)
+		{
+			UC_D_Percent_Pressure_level=(unsigned int)(UC_D_Percent_Pressure_level/10+1);
+		}
+		else
+		{
+			UC_D_Percent_Pressure_level=(unsigned int)(UC_D_Percent_Pressure_level/10);
+		}
+	}
+	
+	if(UI_IsPessureSwitch_SF==TRUE) ////检测压力报警 UI_PessureRange_DF
+	{
+		UI_CurPressure_Level=(UC_D_Percent_Pressure_level*UI_PessureRange_DF)/100;
+		
+		if(UI_CurPressure_Level<=UI_PessureLow_DF)
+		{
+			UC_PressureLevelAlarm_S=LOW_Voltage;
+		}
+		else if(UI_CurPressure_Level>=UI_PessureHigh_DF)
+		{
+			UC_PressureLevelAlarm_S=OVER_Voltage;
+		}
+		else
+		{
+			
+			UC_PressureLevelAlarm_S=ALARM_Normal;
+		}
+	}
+	else//压力开关 解决报警
+	{
+		UC_PressureLevelAlarm_S=ALARM_Normal;
+	}
+}
+
+
+
+/***********************************通过AD 检测隔膜报警**********************************************************************/
+void CheckDiaphragmAlarmProgram(void)
+{
+	if(UI_AD_DiaphragmAdv_D>=862)
+	{
+		UC_DiaphragmAlarm_S=DIA_ERROR;//隔膜报警
+	}
+	else
+	{
+		//UC_DiaphragmAlarm_S=ALARM_Normal;//隔膜正常
+	}
+}
+
+/***********************************开机继电器 输出******************************************************************************/
+void EnableRunRelayOutput(void)
+{
+	if(UI_RunRelayOutput_SF==1) //控制开关开启
+	{
+		SYS_PWR_OUTPUT=ON_H; //开启继电器
+	}
+	else
+	{
+		SYS_PWR_OUTPUT=OFF_L; //开启继电器
+	}
+}
+
+/***********************************异常报警 开启继电器输出**********************************************************************/
+void EnableRelayOnAlarm(void)
+{
+    	// 检测当前最高优先级报警
+    	AlarmType new_alarm = ALARM_NONE;
+	
+	if(UC_LevelKTStatusHL_S==KT_ALARM) //空桶报警
+	{
+		//UC_SignalFault_D=0x01;
+		new_alarm = ALARM_EMPTY_BUCKET;
+		FunctionalWait();//空桶报警 泵暂停
+	}
+	else if(UC_PressureLevelAlarm_S==OVER_Voltage)//高压力报警
+	{
+		//UC_SignalFault_D=0x02;
+		 new_alarm = ALARM_HIGH_PRESSURE;
+		 FunctionalWait();//高压力报警 泵暂停
+	}
+	else if(UC_PressureLevelAlarm_S==LOW_Voltage)//低压力报警
+	{
+		//UC_SignalFault_D=0x03;
+		new_alarm = ALARM_LOW_PRESSURE; //低压力报警 泵暂停
+	}
+	else if(UC_4_20MAAlarmS_S==MA4_20_ERROR)//4-20ma 无输入报警
+	{
+		//UC_SignalFault_D=0x04;
+		new_alarm = ALARM_4_20MA_LOSS;
+		FunctionalWait();//高压力报警 泵暂停
+	}
+	else if(UC_C_PumpAlarm_S==PUMP_ERROR)//泵头无脉冲反馈报警
+	{
+		 //UC_SignalFault_D=0x05;
+		 new_alarm = ALARM_PUMP_FAILURE;
+		 FunctionalWait();//无脉冲 泵暂停bug 先用来测试使用
+	}
+	else if(UI_C_GDAlarm_S==GD_ERROR)//光电异常报警
+	{
+		 //UC_SignalFault_D=0x07;
+		 new_alarm = ALARM_GD_FAILURE;
+	}
+	else if(UC_DiaphragmAlarm_S==DIA_ERROR)//隔膜报警
+	{
+		//UC_SignalFault_D=0x08;
+		 new_alarm = ALARM_DIA_FAILURE;
+		 FunctionalWait();//隔膜报警 泵暂停
+	}
+	/*else if()
+	{
+		机头压力	
+	}*/
+	else //无报警
+	{
+		//UC_SignalFault_D=0x00;//无报警
+	}
+	
+	
+	/* 关键修改：通过last_alarm检测状态变化 */
+   	if(new_alarm != last_alarm) 
+    	{
+        	if(new_alarm != ALARM_NONE)
+		{
+            		// 新报警触发：记录日志
+            		CreateNewAlarm(new_alarm);
+            		active_alarm = new_alarm; // 更新激活报警
+        	} 
+		else
+		{
+            		// 报警解除：清除状态
+            		active_alarm = ALARM_NONE;
+        	}
+        	last_alarm = new_alarm; // 保存当前状态
+    	}
+	
+    	// 更新信号输出（根据需求保留）
+    	UC_SignalFault_D = (uint8_t)active_alarm;
+	//UC_SignalFault_D = (uint8_t)0x07;
+	
+	
+	if(UC_LevelKTStatusHL_S==KT_ALARM||UC_PressureLevelAlarm_S==OVER_Voltage||UC_PressureLevelAlarm_S==LOW_Voltage||UC_4_20MAAlarmS_S==MA4_20_ERROR||UC_C_PumpAlarm_S==PUMP_ERROR||UC_DiaphragmAlarm_S==DIA_ERROR) //现在只有一个4-20ma 无输入的不全面 *bug*
+	{
+		if(UI_FaultyRelayOutput_SF==1)
+		{
+			RELAY_ALARM_CTRL=ON_H;//开启报警继电器	
+		}
+		else
+		{
+			RELAY_ALARM_CTRL=OFF_L; //关闭报警继电器
+		}
+	}
+	else
+	{
+		RELAY_ALARM_CTRL=OFF_L; //关闭报警继电器
+	}
+}
+
+/***********************************激活模式显示**********************************************************************/
+void ActiveMode(void)
+{	
+	// 每次调用先清零，确保状态准确
+   	UC_ActiveMode_S = 0x00;
+	
+	if(UI_SlowModeStatus_SF>0)//快吸慢推模式
+	{
+		UC_ActiveMode_S |= MODE_SLOW;
+	}
+	
+	if(UI_BaudRateStatus_SF>0&&UI_BaudRateStatusIN_S==1) //启动485
+	{
+		UC_ActiveMode_S |= MODE_BUS;
+	}
+	/*
+	else if() //自动拍泡
+	{
+		
+	}
+	else 
+	{
+		//UC_ActiveMode_S=0x01; //线默认流量控制----bug----应该有正常模式和流量控制模式后期分开  流量控制现在==正常模式
+		UC_ActiveMode_S=0x00;
+	}*/
+}
+
+/***********************************检测泵故障  没有反馈脉冲**********************************************************/
+void CheckPumpFault(void)
+{
+	if(ULI_C_PulseCallBack_C==0&&ON_OFF==OPEN) //开机 霍尔为0 报警
+	{
+		UC_C_Gaosu_Count++;
+		if(UC_C_Gaosu_Count>=30)//三十秒内没有反馈脉冲
+		{
+			UC_C_Gaosu_Count=0;
+			UC_C_PumpAlarm_S=PUMP_ERROR;
+		}
+	} 
+	else
+	{
+		//UC_C_PumpAlarm_S=PUMP_NORMAL; //泵正常  --------bug 星星说 泵头报警需要断电才能解除
+		UC_C_Gaosu_Count=0;
+	}
+}
+
+
+
+/***********************************光电异常* 检测 *********************************************************/
+void GDCheck(void)
+{
+	//开机
+	if(ON_OFF==OPEN)
+	{
+		UI_GDError_C++;
+		if(UI_GDError_C>=300) //开机后5分钟内，检测不到光电信号，光电报警
+		{
+			UI_GDError_C=0;
+			UI_GDError_D++;
+			if(UI_GDError_D>=3) //15min
+			{
+				UI_GDError_D=0;
+				UI_C_GDAlarm_S=GD_ERROR;
+			}
+			
+		}
+	}
+	else
+	{
+		UI_GDError_C=0;
+		UI_GDError_D=0;
+	}
+}
+
+
+//检测4-20MA 传感器是否异常 --------------bug --0-20ma AD偏小怎么报警----取消无输入报警 该方法已不用 bug---------偏大报警 方法启用
+void Check4_20MASensorFault(void)
+{	
+	if((UI_4_20MA_AD_D<100&&UC_04_20MAType_SF==M_4_20MATYPE)||UI_4_20MA_AD_D>1000) // 因为有 0ma
+	{
+		if(++UC_4_20MAAlarmS_C>5)//延时判断)
+		{
+			UC_4_20MAAlarmS_C=0;
+			UC_4_20MAAlarmS_S=MA4_20_ERROR; //无输入报警或高压力报警
+		}
+	}
+	else 
+	{
+		UC_4_20MAAlarmS_S=MA4_20_NORMAL; //报警解除
+	}
+}
+
+//定时清除电机霍尔反馈 检查开机后泵头不动报警---bug ---开机是不是也要清楚反馈脉冲
+void ClearHRPulse(void)
+{
+	if(++UC_ClearHRPulse_C>30)
+	{
+		UC_ClearHRPulse_C=0;
+		ULI_C_PulseCallBack_C=0;	
+	}
+}
+
+
+//切换运行模式
+void Toggle_ModeRun(void)
+{
+	//刷新批次剩余流量
+	if(UC_LotVolumeUnit_SF==U_L)
+	{
+		LI_ResidualFlow_D=LI_LotVolume_DF*1000;
+	}
+	else if(UC_LotVolumeUnit_SF==U_ML)
+	{
+		LI_ResidualFlow_D=LI_LotVolume_DF;
+	}
+	
+	//刷新循环投加计时剩余流量
+	if(UC_LoopLotVolumeUnit_SF==U_L)
+	{
+		LI_LoopResidualFlow_D=LI_LoopLotVolume_DF*1000;
+	}
+	else if(UC_LoopLotVolumeUnit_SF==U_ML)
+	{
+		LI_LoopResidualFlow_D=LI_LoopLotVolume_DF;
+	}
+}
+
+/***********************************掉电记忆***************************/
+void PowerOffMemory(void)
+{	
+	if(PWOER_SAVE==1)
+	{
+		UC_D_POWER_SAVE_ZERO_C=0;
+		UC_D_POWER_SAVE_C++;
+		if(UC_D_POWER_SAVE_C>=5)
+		{
+			UC_D_POWER_SAVE_C=0;
+			if(UC_D_SAVE_S==0)
+			{
+				//UC_TS=0;
+				UART2_Stop_T();
+				UART2_Stop_R();
+				UART1_Stop_R();
+				UART1_Stop_T();
+				SYS_PWR_OUTPUT=OFF_L;//关闭运行继电器
+				RELAY_ALARM_CTRL=OFF_L;//关闭报警继电器
+				Com_OFF();//关机
+				UC_D_SAVE_S=1;//掉电记忆保存标识 比如说 写入eepm
+				UC_C_WriteFlash_S=TRUE;
+			}
+		}
+	}
+	else
+	{
+		UC_D_POWER_SAVE_C=0; 
+		UC_D_POWER_SAVE_ZERO_C++;
+		if(UC_D_POWER_SAVE_ZERO_C>=25)
+		{
+			UC_D_POWER_SAVE_ZERO_C=0;
+			if(UC_D_SAVE_S==1&&UC_C_WriteFlash_S==FALSE)
+			{
+				WDTE = 0xFFU; 
+			}
+		}
+	}
+}
+
+
+/***********************************计算累计流量***************************************************************************/
+// 每10秒钟调用的函数，更新sum_mlx10
+void update_secondly_flow(void) 
+{
+    sum_mlx10 += UI_SecondlyFlowML_H1_D; // 累加每10秒的0.1毫升流量
+}
+
+//(30s) 一次累计流量计算
+void ComputeTotalFlow(void)
+{	
+	if(UI_TotalFlowAdd_S==1)
+	{
+		unsigned int delta_L = sum_mlx10 / 1000;
+		unsigned int remainder = sum_mlx10 % 1000;
+		// 计算新增的0.1升单位数和余数
+		sum_mlx10 = remainder; // 保留余数供下次累计
+		
+		// 更新累计流量（单位：0.1升）
+		UI_TotalFlowL_H1_DF += delta_L;
+		
+		// 检查并转换到立方米
+		if (UI_TotalFlowL_H1_DF >= 10000) // 1000升 = 10000 * 0.1升
+		{ 
+		        unsigned int cubic_meters = UI_TotalFlowL_H1_DF / 10000;
+		        UI_FlowInM3_DF += cubic_meters; // 更新立方米累计
+		        UI_TotalFlowL_H1_DF %= 10000; // 保留不足1000升的部分
+		}
+		
+		UI_TotalFlowAdd_S=0;
+	}
+}
+
+/***********************************报警消息 读取 保存 新增***************************************************************************/
+
+/* 从Flash读取报警数据到结构体 */
+void load_alarms(void)
+{
+    unsigned char i,base;
+    for(i = 0; i < MAX_ALARMS; i++) 
+    {
+        base = ALARM_START_IDX + i * ALARM_SIZE;
+	// 报警类型
+        alarm_buffer[i].type  = UC_F_FlashData_A[base+0];
+	
+	 // 时间信息
+        alarm_buffer[i].year  = UC_F_FlashData_A[base+1];
+        alarm_buffer[i].month = UC_F_FlashData_A[base+2];
+        alarm_buffer[i].day   = UC_F_FlashData_A[base+3];
+        alarm_buffer[i].hour  = UC_F_FlashData_A[base+4];
+        alarm_buffer[i].minute= UC_F_FlashData_A[base+5];
+    }
+}
+
+
+/* 保存结构体数组到Flash */
+void save_alarms(void)  // 修改为无参数版本
+{
+	unsigned char i,base;
+    	for(i = 0; i < MAX_ALARMS; i++) {
+        base = ALARM_START_IDX + i * ALARM_SIZE;
+        
+        UC_F_FlashData_A[base] = alarm_buffer[i].type;
+        UC_F_FlashData_A[base+1] = alarm_buffer[i].year;
+        UC_F_FlashData_A[base+2] = alarm_buffer[i].month;
+        UC_F_FlashData_A[base+3] = alarm_buffer[i].day;
+        UC_F_FlashData_A[base+4] = alarm_buffer[i].hour;
+        UC_F_FlashData_A[base+5] = alarm_buffer[i].minute;
+    }
+}
+
+/* 添加新报警（操作结构体数组） */
+void add_alarm_to_buffer(const AlarmMsg* new_alarm)
+{	
+	GetAlarmCount();
+   	/* 计算需要移动的数据量 */
+    	move_count = (alarm_count < MAX_ALARMS) ? alarm_count : (MAX_ALARMS-1);
+    
+    	/* 向后移动旧数据（内存安全操作） */
+    	if(move_count > 0)
+	{
+        	memmove(&alarm_buffer[1],          // 目标地址（从索引1开始）
+                	&alarm_buffer[0],          // 源地址（从索引0开始）
+                	move_count * sizeof(AlarmMsg)); // 移动字节数
+   	}
+
+    	/* 更新报警数量（不超过最大值） */
+    	if(alarm_count < MAX_ALARMS) 
+	{
+       		 alarm_count++;
+    	}
+
+   	/* 写入新报警到缓冲区头部 */
+    	memcpy(&alarm_buffer[0], new_alarm, sizeof(AlarmMsg));
+}
+
+
+/* 添加新报警（操作结构体数组） */
+void CreateNewAlarm(uint8_t type)
+{
+	new_alarm.type =type;
+	new_alarm.year =Read1302(READ_YEAR);
+	new_alarm.month =Read1302(READ_MONTH);
+	new_alarm.day =Read1302(READ_DAY);
+	new_alarm.hour =Read1302(READ_HOUR);
+	new_alarm.minute =Read1302(READ_MINUTE);
+	add_alarm_to_buffer(&new_alarm);
+}
+
+//返回报警计数
+void GetAlarmCount(void) 
+{
+	unsigned char i;
+	for(i=0; i<MAX_ALARMS; i++) 
+	{
+		if(alarm_buffer[i].type == 0xFF||alarm_buffer[i].type == 0x00) 
+		{ // 无效标记
+			alarm_count=i;
+		}
+	}
+	alarm_count=MAX_ALARMS;
+}

@@ -1,0 +1,61 @@
+#ifndef _SET_OTHER_H
+#define _SET_OTHER_H
+
+#define BT_485CLOSE		0x00
+#define BT_485_9600		0x01
+#define BT_485_19200 		0x02
+#define BT_485_38400		0x03
+
+#define SLOWMODE_CLOSE		0x00
+#define SLOWMODE_40		0x01
+#define SLOWMODE_60		0x02
+#define SLOWMODE_80		0x03
+#define SLOWMODE_80		0x03
+
+
+#define REMOTE_OPEN_S		0x01
+#define REMOTE_CLOSE_S		0x00
+
+#define LEVEL_OPEN_S		0xaa
+#define LEVEL_CLOSE_S		0x55
+
+#define ALARM_START_IDX 	154  // 报警数据起始位置
+#define MAX_ALARMS      	5    // 最大报警数量
+#define ALARM_SIZE      	6    // 单条报警数据大小
+
+/* 报警数据结构定义 */
+typedef struct {
+    uint8_t type;     // 报警类型（1字节）
+    uint8_t year;     // 年（BCD格式）
+    uint8_t month;    // 月（BCD）
+    uint8_t day;      // 日（BCD）
+    uint8_t hour;     // 时（BCD）
+    uint8_t minute;   // 分（BCD）
+} AlarmMsg;
+
+void SuckFast(void);
+void PushSlow(void);
+void GetSlopeIntercept_KB (void);
+void UpdateTime(void);
+
+void Change_SystemTime(unsigned char Time_Minute,unsigned char Time_Hour,unsigned char Time_Day,unsigned char Time_Month,unsigned char Time_Year);
+
+void CheckPressureLevelAlarm(void);
+void CheckPumpFault(void);
+void ClearHRPulse(void);
+void Check4_20MASensorFault(void);
+void EnableRunRelayOutput(void);
+void Toggle_ModeRun(void);
+void PowerOffMemory(void);
+void EnableRelayOnAlarm(void);
+void ActiveMode(void);
+void ComputeTotalFlow(void);
+void update_secondly_flow(void);
+void load_alarms(void);
+void save_alarms(void);
+void GetAlarmCount(void);
+void add_alarm_to_buffer(const AlarmMsg* new_alarm);
+void CreateNewAlarm(uint8_t type);
+void GDCheck(void);
+
+#endif
